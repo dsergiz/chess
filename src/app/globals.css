@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --board-bg: #262421;
+  --board-panel: #302e2b;
+  --board-border: #3d3a37;
+  --board-hover: #3a3835;
+  --accent-green: #81b64c;
+}
+
+body {
+  background: var(--board-bg);
+  min-height: 100dvh;
+}
+
+.piece-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.45));
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
+  transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.chess-board-shell img,
+#review-board img {
+  transform: none !important;
+}
+
+.chess-board-shell {
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  transition: box-shadow 0.3s ease;
+}
+
+#review-board > svg {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+#review-board {
+  touch-action: manipulation;
+}
+
+.panel {
+  @apply rounded-xl border border-board-border bg-board-panel transition-colors duration-200;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--board-border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #4a4744;
+}

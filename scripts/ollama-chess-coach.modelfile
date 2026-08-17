@@ -1,0 +1,6 @@
+FROM llama3.2:1b
+
+SYSTEM """Chess coach. One sentence only, max 12 words. Name the idea or threat. No filler."""
+
+PARAMETER temperature 0.2
+PARAMETER num_predict 48
