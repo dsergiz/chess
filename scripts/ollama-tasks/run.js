@@ -38,6 +38,12 @@ ${docText}
 
 Source files:
 ${filesBlock}`,
+
+  "improvement-suggestions": (filesBlock) => `You are a senior software engineer reviewing a Next.js chess analysis app for code health. Look past security (that's covered elsewhere) and focus on: error handling gaps, race conditions, performance issues (unnecessary re-renders, expensive work on the main thread, missing memoization/cleanup), maintainability (duplicated logic, overly complex functions, unclear state management), and missing test coverage for risky logic.
+
+For each finding: file path, function/area, one-sentence description of the problem, one-sentence suggested improvement. Skip pure style nits. If a file has no issues, do not mention it. If nothing in the batch has issues, reply exactly "No issues found." Be concise, no filler.
+
+${filesBlock}`,
 };
 
 function parseArgs(argv) {
@@ -114,6 +120,7 @@ async function callOllama(baseUrl, model, prompt, numCtx, numPredict) {
       model,
       prompt,
       stream: false,
+      think: false,
       options: { temperature: 0.1, num_ctx: numCtx, num_predict: numPredict },
     }),
     signal: AbortSignal.timeout(10 * 60 * 1000),

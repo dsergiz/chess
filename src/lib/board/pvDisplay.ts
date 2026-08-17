@@ -1,6 +1,7 @@
 import type { Square } from "chess.js";
 import { Chess, uciToSan } from "@/lib/chess";
 import type { EngineMove } from "@/types";
+import type { BoardArrow } from "./arrowGeometry";
 
 const LINE_COLORS = [
   "rgba(129, 182, 76, 0.95)",
@@ -9,7 +10,7 @@ const LINE_COLORS = [
   "rgba(192, 132, 252, 0.75)",
 ];
 
-export type BoardArrow = [Square, Square, string?];
+export type { BoardArrow };
 
 export function pvToArrows(
   fen: string,

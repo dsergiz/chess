@@ -6,7 +6,10 @@
     "maxCharsPerBatch": 12000,
     "numCtx": 8192,
     "numPredict": 1024,
-    "extensions": [".ts", ".tsx"]
+    "extensions": [
+      ".ts",
+      ".tsx"
+    ]
   },
   "tasks": [
     {
@@ -14,29 +17,49 @@
       "type": "vulnerability-scan",
       "priority": 1,
       "target": "src/app/api",
-      "enabled": true
+      "enabled": true,
+      "lastRun": "2026-08-17T14:18:49.464Z"
     },
     {
       "id": "vuln-scan-lib",
       "type": "vulnerability-scan",
       "priority": 2,
       "target": "src/lib",
-      "enabled": true
+      "enabled": true,
+      "lastRun": "2026-08-17T14:20:22.778Z"
+    },
+    {
+      "id": "vuln-scan-components",
+      "type": "vulnerability-scan",
+      "priority": 3,
+      "target": "src/components",
+      "enabled": true,
+      "lastRun": "2026-08-17T14:22:17.780Z"
     },
     {
       "id": "dead-code-src",
       "type": "dead-code",
-      "priority": 3,
+      "priority": 4,
       "target": "src",
-      "enabled": true
+      "enabled": true,
+      "lastRun": "2026-08-17T14:25:56.646Z"
     },
     {
       "id": "doc-drift-readme",
       "type": "doc-drift",
-      "priority": 4,
+      "priority": 5,
       "target": "src/lib",
       "docFile": "README.md",
-      "enabled": true
+      "enabled": true,
+      "lastRun": "2026-08-17T14:27:45.676Z"
+    },
+    {
+      "id": "improvement-scan-src",
+      "type": "improvement-suggestions",
+      "priority": 6,
+      "target": "src",
+      "enabled": true,
+      "lastRun": "2026-08-17T14:34:48.622Z"
     }
   ]
 }
