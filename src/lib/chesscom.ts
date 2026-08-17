@@ -55,6 +55,9 @@ export async function fetchPlayerArchives(username: string): Promise<string[]> {
 }
 
 export async function fetchGamesFromArchive(archiveUrl: string): Promise<ChessComGame[]> {
+  if (!archiveUrl.startsWith(`${CHESS_COM_BASE}/player/`)) {
+    throw new Error("Invalid archive URL");
+  }
   const res = await fetch(archiveUrl, {
     headers: { Accept: "application/json" },
     next: { revalidate: 3600 },

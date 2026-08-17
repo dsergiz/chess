@@ -5,14 +5,26 @@ export interface OllamaGenerateResult {
 
 import { CHESS_COACH_SYSTEM } from "./llmPrompt";
 
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+
+/** Ollama always runs on the local machine — reject anything that isn't loopback to prevent SSRF via a caller-supplied baseUrl. */
+function isLoopbackUrl(url: string): boolean {
+  try {
+    return LOOPBACK_HOSTS.has(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
 export async function generateWithOllama(
   prompt: string,
   options?: { baseUrl?: string; model?: string }
 ): Promise<OllamaGenerateResult> {
-  const baseUrl = (options?.baseUrl ?? process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434").replace(
-    /\/$/,
-    ""
-  );
+  const requestedBaseUrl = options?.baseUrl ?? process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434";
+  if (!isLoopbackUrl(requestedBaseUrl)) {
+    return { text: null, error: "Ollama base URL must be a loopback address" };
+  }
+  const baseUrl = requestedBaseUrl.replace(/\/$/, "");
   const model = options?.model ?? process.env.OLLAMA_MODEL ?? "chess-coach";
 
   try {

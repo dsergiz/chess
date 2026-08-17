@@ -416,4 +416,15 @@ export function sanitizePgn(pgn: string): string {
     .replace(/\{(\[\d+:\d+\])\}/g, "");
 }
 
+/** Rejects malformed FEN and embedded newlines before it reaches a UCI command string sent to the engine worker. */
+export function isValidFenForEngine(fen: string): boolean {
+  if (!fen || fen.includes("\n") || fen.includes("\r")) return false;
+  try {
+    new Chess(fen);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export { Chess };

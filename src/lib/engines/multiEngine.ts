@@ -1,5 +1,5 @@
 import type { EngineResult, MultiEngineAnalysis } from "@/types";
-import { uciToSan } from "../chess";
+import { isValidFenForEngine, uciToSan } from "../chess";
 
 export interface StockfishWorkerMessage {
   type: "ready" | "result" | "error";
@@ -47,6 +47,10 @@ export function analyzePositionInWorker(
   return new Promise((resolve, reject) => {
     if (typeof Worker === "undefined") {
       reject(new Error("Web Workers not available"));
+      return;
+    }
+    if (!isValidFenForEngine(fen)) {
+      reject(new Error("Invalid FEN"));
       return;
     }
 

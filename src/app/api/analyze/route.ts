@@ -62,6 +62,8 @@ function analyzeWithChessJs(fen: string, mode?: AnalysisMode): EngineResult[] {
   ];
 }
 
+const MAX_PGN_LENGTH = 50_000;
+
 export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as {
@@ -71,6 +73,10 @@ export async function POST(request: NextRequest) {
       mode?: AnalysisMode;
     };
     const { fen, pgn, ply, mode } = body;
+
+    if (pgn && pgn.length > MAX_PGN_LENGTH) {
+      return NextResponse.json({ error: "PGN too large" }, { status: 413 });
+    }
 
     let positionFen = fen;
     if (pgn && ply !== undefined) {

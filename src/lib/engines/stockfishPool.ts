@@ -1,5 +1,5 @@
 import type { EngineResult, MultiEngineAnalysis } from "@/types";
-import { uciToSan } from "../chess";
+import { isValidFenForEngine, uciToSan } from "../chess";
 import { buildConsensus } from "./multiEngine";
 import { sanitizeAnalysis } from "./normalizeAnalysis";
 import {
@@ -147,6 +147,10 @@ function runAnalysisPass(
   return new Promise(async (resolve, reject) => {
     if (!worker) {
       reject(new Error("Worker not initialized"));
+      return;
+    }
+    if (!isValidFenForEngine(fen)) {
+      reject(new Error("Invalid FEN"));
       return;
     }
 
