@@ -1,4 +1,5 @@
 import { Chess, type Square } from "chess.js";
+import { pieceName } from "../chess";
 
 export interface TacticalMotif {
   type: "fork" | "pin" | "skewer" | "discovered" | "check" | "capture";
@@ -128,6 +129,98 @@ export function detectTacticalMotifs(fen: string): TacticalMotif[] {
   return motifs.slice(0, 4);
 }
 
+const DEVELOPMENT_SQUARES: Record<string, string> = {
+  b1: "n",
+  g1: "n",
+  c1: "b",
+  f1: "b",
+  b8: "n",
+  g8: "n",
+  c8: "b",
+  f8: "b",
+};
+
+const CENTRAL_SQUARES = new Set(["d4", "d5", "e4", "e5"]);
+
+/** An enemy piece the mover now attacks that wasn't already under attack and isn't defended. */
+function findNewThreat(before: Chess, after: Chess, moverColor: "w" | "b"): string | null {
+  const enemy = moverColor === "w" ? "b" : "w";
+  const board = after.board();
+  for (let r = 0; r < 8; r++) {
+    for (let f = 0; f < 8; f++) {
+      const piece = board[r][f];
+      if (!piece || piece.color !== enemy || piece.type === "k") continue;
+      const sq = coordsToSquare(f, 7 - r);
+      if (!after.isAttacked(sq, moverColor)) continue;
+      if (after.isAttacked(sq, enemy)) continue;
+      if (before.isAttacked(sq, moverColor)) continue;
+      return `threatens to win the ${pieceName(piece.type)} on ${sq}`;
+    }
+  }
+  return null;
+}
+
+/** The piece that just moved was hanging before the move and no longer is. */
+function findEscape(
+  before: Chess,
+  after: Chess,
+  fromSquare: Square,
+  toSquare: Square,
+  moverColor: "w" | "b",
+  movedPieceType: string
+): string | null {
+  const enemy = moverColor === "w" ? "b" : "w";
+  const wasHanging = before.isAttacked(fromSquare, enemy) && !before.isAttacked(fromSquare, moverColor);
+  if (!wasHanging) return null;
+  const stillHanging = after.isAttacked(toSquare, enemy) && !after.isAttacked(toSquare, moverColor);
+  if (stillHanging) return null;
+  return `moves the ${pieceName(movedPieceType)} to safety`;
+}
+
+/** Positional shape when there's no tactic or threat to point to: castling, a central pawn, or development. */
+function describeMoveShape(
+  fromSquare: string,
+  toSquare: string,
+  movedPieceType: string,
+  isCastleQueenside: boolean,
+  isCastleKingside: boolean
+): string | null {
+  if (isCastleQueenside) return "castles queenside, tucking the king away and connecting the rooks";
+  if (isCastleKingside) return "castles kingside, tucking the king away safely";
+  if (movedPieceType === "p" && CENTRAL_SQUARES.has(toSquare)) return "claims central space";
+  if (DEVELOPMENT_SQUARES[fromSquare] === movedPieceType) return `develops the ${pieceName(movedPieceType)}`;
+  return null;
+}
+
+/** Best-effort reason the move is good when no tactical motif applies: a new threat, an escape, or a positional shape. */
+function describeMoveIdea(fen: string, san: string, uci?: string): string | null {
+  if (!uci || uci.length < 4) return null;
+  const from = uci.slice(0, 2) as Square;
+  const to = uci.slice(2, 4) as Square;
+  const promotion = uci.length > 4 ? (uci[4] as "q" | "r" | "b" | "n") : undefined;
+
+  try {
+    const before = new Chess(fen);
+    const movedPieceType = before.get(from)?.type;
+    if (!movedPieceType) return null;
+    const moverColor = before.turn();
+
+    const after = new Chess(fen);
+    after.move({ from, to, promotion });
+
+    const threat = findNewThreat(before, after, moverColor);
+    if (threat) return `${san} ${threat}.`;
+
+    const escape = findEscape(before, after, from, to, moverColor, movedPieceType);
+    if (escape) return `${san} ${escape}.`;
+
+    const shape = describeMoveShape(from, to, movedPieceType, san.startsWith("O-O-O"), san.startsWith("O-O"));
+    return shape ? `${san} ${shape}.` : null;
+  } catch {
+    return null;
+  }
+}
+
 export function explainBestMoveIdea(
   fen: string,
   bestSan: string,
@@ -138,6 +231,9 @@ export function explainBestMoveIdea(
 
   if (motifs.length > 0) {
     parts.push(motifs[0].description);
+  } else {
+    const idea = describeMoveIdea(fen, bestSan, pv[0]);
+    if (idea) parts.push(idea);
   }
 
   if (pv.length > 1) {

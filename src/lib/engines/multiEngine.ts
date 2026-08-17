@@ -1,5 +1,5 @@
 import type { EngineResult, MultiEngineAnalysis } from "@/types";
-import { uciToSan } from "../chess";
+import { isValidFenForEngine, uciToSan } from "../chess";
 
 export interface StockfishWorkerMessage {
   type: "ready" | "result" | "error";
@@ -49,8 +49,12 @@ export function analyzePositionInWorker(
       reject(new Error("Web Workers not available"));
       return;
     }
+    if (!isValidFenForEngine(fen)) {
+      reject(new Error("Invalid FEN"));
+      return;
+    }
 
-    const worker = new Worker("/stockfish-worker.js");
+    const worker = new Worker("/stockfish.js");
     let bestInfo: ParsedInfoLine | null = null;
     const allMoves = new Map<string, { score: number; mate?: number; depth: number; pv: string[] }>();
     let timeout: ReturnType<typeof setTimeout>;
@@ -151,6 +155,7 @@ export {
   cancelActiveAnalysis,
   getCachedAnalysis,
   clearAnalysisCache,
+  primeAnalysisCache,
 } from "./stockfishPool";
 export type { AnalysisMode } from "./analysisModes";
 export { ANALYSIS_MODE_LABELS } from "./analysisModes";

@@ -1,6 +1,18 @@
+import { Chess } from "chess.js";
 import type { ChessComGame } from "@/types";
 
 const CHESS_COM_BASE = "https://api.chess.com/pub";
+
+/** Full-move count (e.g. "1. e4 e5" counts as 1) parsed from the game's PGN. */
+function moveCountFromPgn(pgn: string): number {
+  try {
+    const chess = new Chess();
+    chess.loadPgn(pgn, { strict: false });
+    return Math.ceil(chess.history().length / 2);
+  } catch {
+    return 0;
+  }
+}
 
 /** Raw shape returned by chess.com public API (snake_case). */
 interface ChessComRawGame {
@@ -24,6 +36,7 @@ export function normalizeChessComGame(raw: ChessComRawGame): ChessComGame {
     timeControl: raw.time_control ?? raw.timeControl ?? "?",
     endTime: raw.end_time ?? raw.endTime ?? 0,
     rated: raw.rated ?? false,
+    moveCount: moveCountFromPgn(raw.pgn),
     white: raw.white,
     black: raw.black,
   };
@@ -42,6 +55,9 @@ export async function fetchPlayerArchives(username: string): Promise<string[]> {
 }
 
 export async function fetchGamesFromArchive(archiveUrl: string): Promise<ChessComGame[]> {
+  if (!archiveUrl.startsWith(`${CHESS_COM_BASE}/player/`)) {
+    throw new Error("Invalid archive URL");
+  }
   const res = await fetch(archiveUrl, {
     headers: { Accept: "application/json" },
     next: { revalidate: 3600 },

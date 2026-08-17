@@ -8,7 +8,7 @@ AI-powered chess game review — import games from Chess.com or PGN, navigate mo
 - **PGN import** — paste any game
 - **Multi-engine analysis** — Stockfish at multiple depths with consensus voting
 - **AI commentary** — explains best moves, eval swings, and path to position
-- **Classic UI** — cburnett piece set, capture animations, mobile-friendly controls
+- **Classic UI** — neo piece set, capture animations, mobile-friendly controls
 - **Drag & drop board** — touch-optimized piece movement on mobile
 
 ## Getting Started
@@ -36,10 +36,10 @@ In the analysis panel, pick a mode before clicking **Analyze**:
 
 | Mode | Speed | Purpose |
 |------|-------|---------|
-| **Fast** (default) | ~0.5s | Quick eval while browsing |
-| **Deep** | ~2s | Important positions |
-| **Tactical** | ~1s | Multiple candidate lines |
-| **Compare** | ~2.5s | 3-pass Stockfish consensus |
+| **Fast** (default) | ~0.65s | Quick eval while browsing |
+| **Deep** | ~3.5s | Important positions |
+| **Tactical** | ~1.6s | Multiple candidate lines |
+| **Compare** | ~3.5s | 3-pass Stockfish consensus |
 
 ## Tech Stack
 

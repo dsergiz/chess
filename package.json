@@ -12,7 +12,8 @@
     "test:e2e": "playwright test",
     "test:all": "vitest run && playwright test",
     "qa": "vitest run && next build && playwright test",
-    "postinstall": "node scripts/copy-stockfish.js && node scripts/download-pieces.js"
+    "postinstall": "node scripts/copy-stockfish.js && node scripts/download-pieces.js",
+    "ollama:tasks": "node scripts/ollama-tasks/run.js"
   },
   "dependencies": {
     "chess.js": "^1.0.0",
@@ -24,7 +25,7 @@
     "react-chessboard": "^4.7.2",
     "react-dnd-touch-backend": "^16.0.1",
     "react-dom": "^19.0.0",
-    "stockfish.js": "^10.0.2"
+    "stockfish": "^18.0.8"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.1",

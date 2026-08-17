@@ -22,6 +22,15 @@ const CLASSIFICATION_STYLES: Record<
   miss: { bg: "bg-purple-500/20", text: "text-purple-300", label: "Miss" },
 };
 
+const COMPACT_ROW_COUNT = 4;
+
+export interface PreviewBranch {
+  /** Ply the preview diverges from — the branch's move numbering continues from here. */
+  anchorPly: number;
+  sanMoves: string[];
+  currentStep: number;
+}
+
 interface MoveListProps {
   game: ImportedGame;
   moves: { san: string; ply: number; color: "w" | "b" }[];
@@ -31,6 +40,8 @@ interface MoveListProps {
   expanded?: boolean;
   onExpandedChange?: (expanded: boolean) => void;
   variant?: "default" | "sidebar";
+  previewBranch?: PreviewBranch | null;
+  onSelectPreviewStep?: (step: number) => void;
 }
 
 function formatMoveSummary(game: ImportedGame, currentPly: number): string {
@@ -39,6 +50,8 @@ function formatMoveSummary(game: ImportedGame, currentPly: number): string {
   if (path.length <= 28) return path;
   return `…${path.slice(-25)}`;
 }
+
+type MoveRow = { num: number; white?: MoveListProps["moves"][number]; black?: MoveListProps["moves"][number] };
 
 export function MoveList({
   game,
@@ -49,6 +62,8 @@ export function MoveList({
   expanded = false,
   onExpandedChange,
   variant = "default",
+  previewBranch,
+  onSelectPreviewStep,
 }: MoveListProps) {
   const isSidebar = variant === "sidebar";
   const listClassName = clsx(
@@ -58,7 +73,7 @@ export function MoveList({
   const listRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLButtonElement>(null);
 
-  const rows: { num: number; white?: typeof moves[0]; black?: typeof moves[0] }[] = [];
+  const rows: MoveRow[] = [];
   for (let i = 0; i < moves.length; i += 2) {
     rows.push({
       num: Math.floor(i / 2) + 1,
@@ -67,9 +82,28 @@ export function MoveList({
     });
   }
 
+  const activeRowIndex = currentPly === 0 ? 0 : Math.floor((currentPly - 1) / 2);
+  const windowEnd = expanded
+    ? rows.length - 1
+    : Math.min(rows.length - 1, Math.max(activeRowIndex, COMPACT_ROW_COUNT - 1));
+  const windowStart = expanded ? 0 : Math.max(0, windowEnd - COMPACT_ROW_COUNT + 1);
+  const visibleRows = rows.slice(windowStart, windowEnd + 1);
+
+  // Keep the active move in view within the list's own scroll box only — scrollIntoView()
+  // would happily scroll ancestor containers (including the whole page) to satisfy itself,
+  // which is what was shoving the board out of view on every move.
   useEffect(() => {
-    if (!expanded || !activeRef.current || !listRef.current) return;
-    activeRef.current.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    if (!expanded) return;
+    const container = listRef.current;
+    const target = activeRef.current;
+    if (!container || !target) return;
+    const cRect = container.getBoundingClientRect();
+    const tRect = target.getBoundingClientRect();
+    if (tRect.top < cRect.top) {
+      container.scrollTop -= cRect.top - tRect.top;
+    } else if (tRect.bottom > cRect.bottom) {
+      container.scrollTop += tRect.bottom - cRect.bottom;
+    }
   }, [currentPly, expanded]);
 
   const summary = formatMoveSummary(game, currentPly);
@@ -77,6 +111,37 @@ export function MoveList({
     currentPly === 0
       ? "Start"
       : `${Math.ceil(currentPly / 2)}${currentPly % 2 === 1 ? "." : "…"}`;
+
+  const renderRow = (row: MoveRow) => (
+    <div
+      key={row.num}
+      className="grid grid-cols-[2.5rem_1fr_1fr] gap-0 px-2 py-0.5 hover:bg-board-hover/50"
+    >
+      <span className="text-gray-500 py-2">{row.num}</span>
+      {row.white ? (
+        <MoveCell
+          ref={row.white.ply === currentPly ? activeRef : undefined}
+          move={row.white}
+          currentPly={currentPly}
+          onSelect={onSelectPly}
+          classification={classifications?.get(row.white.ply)}
+        />
+      ) : (
+        <span />
+      )}
+      {row.black ? (
+        <MoveCell
+          ref={row.black.ply === currentPly ? activeRef : undefined}
+          move={row.black}
+          currentPly={currentPly}
+          onSelect={onSelectPly}
+          classification={classifications?.get(row.black.ply)}
+        />
+      ) : (
+        <span />
+      )}
+    </div>
+  );
 
   return (
     <div className="panel flex flex-col min-h-0 relative z-10" data-testid="move-list-panel">
@@ -116,44 +181,58 @@ export function MoveList({
         )}
       </button>
 
-      {expanded && (
-      <div ref={listRef} className={listClassName} data-testid="move-list">
+      {previewBranch && previewBranch.sanMoves.length > 0 && (
+        <div
+          className="border-b border-amber-500/30 bg-amber-500/5 px-3 py-2"
+          data-testid="move-list-preview-branch"
+        >
+          <p className="text-[10px] uppercase tracking-wider text-amber-400/80 mb-1">
+            Line preview from move {previewBranch.anchorPly}
+          </p>
+          <div className="flex flex-wrap items-center gap-x-1 gap-y-1 text-sm font-mono">
+            {previewBranch.sanMoves.map((san, i) => {
+              const ply = previewBranch.anchorPly + i + 1;
+              const isWhiteMove = ply % 2 === 1;
+              const step = i + 1;
+              const isActive = previewBranch.currentStep === step;
+              return (
+                <span key={i} className="flex items-center gap-1">
+                  {isWhiteMove && (
+                    <span className="text-gray-600 text-xs">{Math.ceil(ply / 2)}.</span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => onSelectPreviewStep?.(step)}
+                    className={clsx(
+                      "px-1.5 py-0.5 rounded transition-colors touch-manipulation",
+                      isActive ? "bg-amber-500/30 text-white" : "text-amber-300/80 hover:text-white"
+                    )}
+                  >
+                    {san}
+                  </button>
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {expanded ? (
+        <div ref={listRef} className={listClassName} data-testid="move-list">
           <div className="grid grid-cols-[2.5rem_1fr_1fr] gap-0 text-sm sticky top-0 bg-board-panel border-b border-board-border px-2 py-2 font-medium text-gray-500 z-10">
             <span>#</span>
             <span>White</span>
             <span>Black</span>
           </div>
-          {rows.map((row) => (
-            <div
-              key={row.num}
-              className="grid grid-cols-[2.5rem_1fr_1fr] gap-0 px-2 py-0.5 hover:bg-board-hover/50"
-            >
-              <span className="text-gray-500 py-2">{row.num}</span>
-              {row.white ? (
-                <MoveCell
-                  ref={row.white.ply === currentPly ? activeRef : undefined}
-                  move={row.white}
-                  currentPly={currentPly}
-                  onSelect={onSelectPly}
-                  classification={classifications?.get(row.white.ply)}
-                />
-              ) : (
-                <span />
-              )}
-              {row.black ? (
-                <MoveCell
-                  ref={row.black.ply === currentPly ? activeRef : undefined}
-                  move={row.black}
-                  currentPly={currentPly}
-                  onSelect={onSelectPly}
-                  classification={classifications?.get(row.black.ply)}
-                />
-              ) : (
-                <span />
-              )}
-            </div>
-          ))}
+          {visibleRows.map(renderRow)}
         </div>
+      ) : (
+        !previewBranch &&
+        rows.length > 0 && (
+          <div className="text-sm" data-testid="move-list-compact">
+            {visibleRows.map(renderRow)}
+          </div>
+        )
       )}
     </div>
   );

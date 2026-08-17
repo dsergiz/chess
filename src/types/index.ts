@@ -76,6 +76,7 @@ export interface ChessComGame {
   timeControl: string;
   endTime: number;
   rated: boolean;
+  moveCount: number;
   white: { username: string; rating: number; result: string };
   black: { username: string; rating: number; result: string };
 }
