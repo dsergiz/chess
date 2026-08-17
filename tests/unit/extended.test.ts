@@ -82,6 +82,7 @@ describe("chesscom helpers", () => {
     timeControl: "600+0",
     endTime: 1700000000,
     rated: true,
+    moveCount: 12,
     white: { username: "alice", rating: 1500, result: "win" },
     black: { username: "bob", rating: 1400, result: "checkmated" },
   };

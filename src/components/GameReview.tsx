@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import clsx from "clsx";
 import type { Square } from "chess.js";
-import { Chess, fenAtPly, parsePgn, classifyMove } from "@/lib/chess";
+import { Chess, fenAtPly, parsePgn, classifyMove, uciToSan } from "@/lib/chess";
 import {
   buildMoveHintStyles,
   castlingRookMove,
@@ -14,7 +15,8 @@ import {
   sideToMove,
   tryMove,
 } from "@/lib/boardInteraction";
-import { analyzeWithMultipleEngines, cancelLiveAnalysis, clearAnalysisCache, getCachedAnalysis } from "@/lib/engines/multiEngine";
+import { analyzeWithMultipleEngines, cancelLiveAnalysis, getCachedAnalysis, primeAnalysisCache } from "@/lib/engines/multiEngine";
+import { loadCachedGameAnalysis, saveCachedGameAnalysis } from "@/lib/gameReview/analysisCacheDB";
 import type { AnalysisMode } from "@/lib/engines/analysisModes";
 import { generatePositionCommentary } from "@/lib/commentary/generator";
 import type {
@@ -30,13 +32,13 @@ import { mergePositionCommentary } from "@/lib/commentary/coachEngineCompare";
 import { AnimatedChessboard, BOARD_BEST_FROM, BOARD_BEST_TO, BoardControls } from "./AnimatedChessboard";
 import { AppSidebar } from "./AppSidebar";
 import { EngineRail } from "./EngineRail";
-import { MoveList } from "./MoveList";
+import { MoveList, CLASSIFICATION_STYLES } from "./MoveList";
 import { BestMovesPanel } from "./BestMovesPanel";
 import { GameReviewProgress, formatReviewGameTitle } from "./GameReviewProgress";
 import { PlayerBar } from "./PlayerBar";
 import { batchAnalyzeGame, cancelBatchReview, type BatchReviewProgress } from "@/lib/gameReview/batchAnalysis";
 import { formatReviewDuration } from "@/lib/gameReview/reviewTiming";
-import { fetchOpeningBook, type BookMove } from "@/lib/openingExplorer";
+import { fetchOpeningBook, fetchBookMoveSets, type BookMove } from "@/lib/openingExplorer";
 import { resolveOpening, type DetectedOpening } from "@/lib/openings/detectOpening";
 import { suggestModelGames } from "@/lib/openings/modelGames";
 import { BoardEvalBar } from "./BoardEvalBar";
@@ -54,9 +56,22 @@ import {
   pvToArrows,
 } from "@/lib/board/pvDisplay";
 
+/** Opening theory rarely runs deeper than this — bounds how many positions get a real book lookup. */
+const BOOK_CLASSIFICATION_PLY_LIMIT = 24;
+
+/** Real Lichess Masters book-move data for the game's opening plies, for move classification. */
+async function fetchBookDataForGame(game: ImportedGame): Promise<Map<string, Set<string>>> {
+  const cap = Math.min(game.moves.length, BOOK_CLASSIFICATION_PLY_LIMIT);
+  const fens = Array.from({ length: cap }, (_, ply) => fenAtPly(game, ply));
+  try {
+    return await fetchBookMoveSets(fens);
+  } catch {
+    return new Map();
+  }
+}
+
 export function GameReview() {
   const [game, setGame] = useState<ImportedGame | null>(null);
-  const [reviewingGame, setReviewingGame] = useState<ImportedGame | null>(null);
   const [currentPly, setCurrentPly] = useState(0);
   const [orientation, setOrientation] = useState<"white" | "black">("white");
   const [liveConsensus, setLiveConsensus] = useState<MultiEngineAnalysis | null>(null);
@@ -78,6 +93,9 @@ export function GameReview() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<"import" | "masters">("import");
   const [moveListExpanded, setMoveListExpanded] = useState(false);
+  const [expandedClassification, setExpandedClassification] = useState<MoveClassification | null>(
+    null
+  );
   const [engineExpanded, setEngineExpanded] = useState(true);
   const [liveAnalyzing, setLiveAnalyzing] = useState(false);
   const [bookMoves, setBookMoves] = useState<BookMove[]>([]);
@@ -232,6 +250,31 @@ export function GameReview() {
     });
   }, [game, gameReviewCache]);
 
+  const playedLine = useMemo(() => {
+    if (!game || currentPly >= game.moves.length) return null;
+    const upcoming = game.moves.slice(currentPly, currentPly + 4);
+    if (upcoming.length === 0) return null;
+    return { san: upcoming[0].san, pv: upcoming.map((m) => m.uci) };
+  }, [game, currentPly]);
+
+  const reviewSummary = useMemo(() => {
+    if (!gameReviewCache || classifications.size === 0) return null;
+    const counts = new Map<MoveClassification, number>();
+    classifications.forEach((cls) => counts.set(cls, (counts.get(cls) ?? 0) + 1));
+    return counts;
+  }, [gameReviewCache, classifications]);
+
+  const pliesByClassification = useMemo(() => {
+    const map = new Map<MoveClassification, number[]>();
+    classifications.forEach((cls, ply) => {
+      const arr = map.get(cls);
+      if (arr) arr.push(ply);
+      else map.set(cls, [ply]);
+    });
+    map.forEach((arr) => arr.sort((a, b) => a - b));
+    return map;
+  }, [classifications]);
+
   const clearAnalysis = useCallback(() => {
     setLiveConsensus(null);
     setLiveAnalysisFen(null);
@@ -244,16 +287,6 @@ export function GameReview() {
     analysisSeq.current += 1;
     cancelLiveAnalysis();
   }, []);
-
-  const applyAnalysisResultRef = useRef<
-    (
-      result: MultiEngineAnalysis,
-      fenSnapshot: string,
-      plySnapshot: number,
-      isVariation: boolean,
-      options: { kind: "live" | "deep"; withCommentary?: boolean; mode?: AnalysisMode }
-    ) => void
-  >(() => {});
 
   const applyAnalysisResult = useCallback(
     (
@@ -331,8 +364,6 @@ export function GameReview() {
     [game]
   );
 
-  applyAnalysisResultRef.current = applyAnalysisResult;
-
   const clearSelection = useCallback(() => setSelectedSquare(null), []);
 
   useEffect(() => {
@@ -348,9 +379,10 @@ export function GameReview() {
     (pgn: string, sourceId?: string) => {
       try {
         const imported = parsePgn(pgn, sourceId);
-        clearAnalysisCache();
-        setReviewingGame(imported);
-        setGame(null);
+        batchRunIdRef.current += 1;
+        batchCancelRef.current = true;
+        cancelBatchReview();
+        setGame(imported);
         setCurrentPly(0);
         setExploreFen(null);
         setExploreMode(false);
@@ -363,14 +395,9 @@ export function GameReview() {
         setGameReviewCache(null);
         setReviewTimingStats(null);
         setReviewElapsedMs(0);
+        setBatchReview(null);
         setCoachAlignmentStats({ compared: 0, aligned: 0, partial: 0, divergent: 0 });
         setClassifications(new Map());
-        setBatchReview({
-          percent: 0,
-          done: 0,
-          total: imported.moves.length + 1,
-          gameTitle: formatReviewGameTitle(imported.headers),
-        });
         clearSelection();
       } catch (err) {
         setImportError(err instanceof Error ? err.message : "Failed to load game");
@@ -383,63 +410,111 @@ export function GameReview() {
     loadGame(DEMO_PGN, DEMO_GAME_ID);
   }, [loadGame]);
 
+  // Cheap, automatic: hydrate from a previous review already sitting in IndexedDB.
+  // Never runs Stockfish — that only happens when the user explicitly starts a review.
   useEffect(() => {
-    if (!reviewingGame) return;
-
-    const runId = ++batchRunIdRef.current;
-    batchCancelRef.current = false;
-    cancelPendingAnalysis();
-
-    const gameTitle = formatReviewGameTitle(reviewingGame.headers);
-    const total = reviewingGame.moves.length + 1;
+    if (!game) return;
     let active = true;
 
     void (async () => {
-      const { cache, stats } = await batchAnalyzeGame(
-        reviewingGame,
-        (done, count, elapsedMs) => {
-          if (!active || runId !== batchRunIdRef.current) return;
-          setReviewElapsedMs(elapsedMs);
-          setBatchReview({
-            percent: Math.round((done / count) * 100),
-            done,
-            total: count,
-            gameTitle,
-          });
-        },
-        () => batchCancelRef.current || !active || runId !== batchRunIdRef.current
+      const persisted = await loadCachedGameAnalysis(game.id);
+      if (!active || !persisted || persisted.length === 0) return;
+
+      primeAnalysisCache(persisted.map((e) => ({ fen: e.fen, mode: e.mode, analysis: e.analysis })));
+
+      const byFen = new Map(
+        persisted.filter((e) => e.mode === "review").map((e) => [e.fen, e.analysis])
       );
-
-      if (!active || batchCancelRef.current || runId !== batchRunIdRef.current) return;
-
+      const total = game.moves.length + 1;
       const sanitizedCache = new Map<number, MultiEngineAnalysis>();
-      cache.forEach((analysis, ply) => {
-        const fen = fenAtPly(reviewingGame, ply);
-        const prepared = prepareAnalysisForDisplay(fen, analysis);
-        if (prepared) sanitizedCache.set(ply, prepared);
-      });
+      for (let ply = 0; ply < total; ply++) {
+        const analysis = byFen.get(fenAtPly(game, ply));
+        if (analysis) sanitizedCache.set(ply, analysis);
+      }
 
-      setGame(reviewingGame);
-      setReviewingGame(null);
+      if (!active || sanitizedCache.size !== total) return;
       setGameReviewCache(sanitizedCache);
-      setReviewTimingStats(stats);
-      setBatchReview(null);
-      setReviewElapsedMs(0);
-      setClassifications(computeClassificationsFromCache(reviewingGame, sanitizedCache, true));
-
-      const plyCache = sanitizedCache.get(0);
-      if (plyCache) {
-        applyAnalysisResultRef.current(plyCache, reviewingGame.startingFen, 0, false, { kind: "live" });
+      setClassifications(computeClassificationsFromCache(game, sanitizedCache, true));
+      const bookData = await fetchBookDataForGame(game);
+      if (active) {
+        setClassifications(computeClassificationsFromCache(game, sanitizedCache, true, bookData));
       }
     })();
 
     return () => {
-      batchRunIdRef.current += 1;
       active = false;
+    };
+  }, [game?.id]);
+
+  const runFullReview = useCallback(() => {
+    if (!game || batchReview) return;
+    const targetGame = game;
+    const runId = ++batchRunIdRef.current;
+    batchCancelRef.current = false;
+    cancelPendingAnalysis();
+
+    const gameTitle = formatReviewGameTitle(targetGame.headers);
+    const total = targetGame.moves.length + 1;
+    setReviewElapsedMs(0);
+    setBatchReview({ percent: 0, done: 0, total, gameTitle });
+
+    void (async () => {
+      const { cache, stats } = await batchAnalyzeGame(
+        targetGame,
+        (done, count, elapsedMs) => {
+          if (runId !== batchRunIdRef.current) return;
+          setReviewElapsedMs(elapsedMs);
+          setBatchReview({ percent: Math.round((done / count) * 100), done, total: count, gameTitle });
+        },
+        () => batchCancelRef.current || runId !== batchRunIdRef.current
+      );
+
+      if (batchCancelRef.current || runId !== batchRunIdRef.current) return;
+
+      const sanitizedCache = new Map<number, MultiEngineAnalysis>();
+      cache.forEach((analysis, ply) => {
+        const fen = fenAtPly(targetGame, ply);
+        const prepared = prepareAnalysisForDisplay(fen, analysis);
+        if (prepared) sanitizedCache.set(ply, prepared);
+      });
+
+      if (sanitizedCache.size === total) {
+        void saveCachedGameAnalysis(
+          targetGame.id,
+          Array.from(sanitizedCache.entries()).map(([ply, analysis]) => ({
+            fen: fenAtPly(targetGame, ply),
+            mode: "review" as const,
+            analysis,
+          }))
+        );
+      }
+
+      setGameReviewCache(sanitizedCache);
+      setReviewTimingStats(stats);
+      setBatchReview(null);
+      setReviewElapsedMs(0);
+      setClassifications(computeClassificationsFromCache(targetGame, sanitizedCache, true));
+      const bookData = await fetchBookDataForGame(targetGame);
+      if (runId === batchRunIdRef.current) {
+        setClassifications(computeClassificationsFromCache(targetGame, sanitizedCache, true, bookData));
+      }
+    })();
+  }, [game, batchReview, cancelPendingAnalysis]);
+
+  const cancelFullReview = useCallback(() => {
+    batchRunIdRef.current += 1;
+    batchCancelRef.current = true;
+    cancelBatchReview();
+    setBatchReview(null);
+    setReviewElapsedMs(0);
+  }, []);
+
+  useEffect(() => {
+    return () => {
       batchCancelRef.current = true;
       cancelBatchReview();
     };
-  }, [reviewingGame?.id, cancelPendingAnalysis]);
+  }, []);
 
   const handleChessComGame = useCallback(
     (chessGame: ChessComGame) => {
@@ -453,7 +528,7 @@ export function GameReview() {
   );
 
   const goToPly = useCallback(
-    (ply: number) => {
+    (ply: number, opts?: { collapseMoveList?: boolean }) => {
       if (!game) return;
       setExploreFen(null);
       setExploreMode(false);
@@ -463,6 +538,10 @@ export function GameReview() {
       setDeepCommentary(null);
       cancelPendingAnalysis();
       clearSelection();
+      // Sequential-style navigation (arrow keys, Prev/Next buttons) re-minimizes the move
+      // list; jumping to a specific move from the expanded list or a classification lookup
+      // leaves it as-is so the user can keep browsing what they opened it for.
+      if (opts?.collapseMoveList ?? true) setMoveListExpanded(false);
     },
     [game, cancelPendingAnalysis, clearSelection]
   );
@@ -470,15 +549,14 @@ export function GameReview() {
   const startLinePreview = useCallback(
     (pv: string[]) => {
       if (!game || pv.length === 0) return;
-      const anchorFen = exploreFen ?? fenAtPly(game, currentPly);
-      setLinePreview({ anchorFen, anchorPly: currentPly, pv, step: 1 });
+      setLinePreview({ anchorFen: currentFen, anchorPly: currentPly, pv, step: 1 });
       setExploreMode(true);
       setExploreFen(null);
       setSelectedLineUci(pv[0] ?? null);
       setDeepCommentary(null);
       cancelPendingAnalysis();
     },
-    [game, currentPly, exploreFen, cancelPendingAnalysis]
+    [game, currentFen, currentPly, cancelPendingAnalysis]
   );
 
   const stepLinePreview = useCallback((delta: number) => {
@@ -488,6 +566,33 @@ export function GameReview() {
       return { ...prev, step: next };
     });
   }, []);
+
+  const goToPreviewStep = useCallback((step: number) => {
+    setLinePreview((prev) =>
+      prev ? { ...prev, step: Math.max(0, Math.min(prev.pv.length, step)) } : prev
+    );
+  }, []);
+
+  const previewSanMoves = useMemo(() => {
+    if (!linePreview) return [];
+    const sans: string[] = [];
+    let position = linePreview.anchorFen;
+    for (const uci of linePreview.pv) {
+      try {
+        sans.push(uciToSan(position, uci));
+        const chess = new Chess(position);
+        chess.move({
+          from: uci.slice(0, 2) as Square,
+          to: uci.slice(2, 4) as Square,
+          promotion: uci.length > 4 ? (uci[4] as "q" | "r" | "b" | "n") : undefined,
+        });
+        position = chess.fen();
+      } catch {
+        break;
+      }
+    }
+    return sans;
+  }, [linePreview]);
 
   const applyMove = useCallback(
     (from: Square, to: Square, promotion?: "q" | "r" | "b" | "n") => {
@@ -637,8 +742,9 @@ export function GameReview() {
       const batchCached = gameReviewCache?.get(currentPly);
       if (batchCached) {
         applyAnalysisResult(batchCached, currentFen, currentPly, false, { kind: "live" });
+        return;
       }
-      return;
+      // No full-game review yet — fall through and analyze this position live, on demand.
     }
 
     const cached = getCachedAnalysis(currentFen, "fast");
@@ -710,6 +816,18 @@ export function GameReview() {
     [selectedSquare, legalTargets, currentFen, turn, applyMove, clearSelection]
   );
 
+  const onPieceDragBegin = useCallback(
+    (square: Square) => {
+      const piece = pieceAt(currentFen, square);
+      if (piece && pieceColor(piece) === turn) setSelectedSquare(square);
+    },
+    [currentFen, turn]
+  );
+
+  const onPieceDragEnd = useCallback(() => {
+    clearSelection();
+  }, [clearSelection]);
+
   const onPieceDrop = useCallback(
     (source: Square, target: Square) => applyMove(source, target),
     [applyMove]
@@ -752,12 +870,13 @@ export function GameReview() {
       return pvToArrows(linePreview.anchorFen, played, played.length);
     }
     const anchorFen = game ? fenAtPly(game, currentPly) : currentFen;
+    const anchorSide = sideToMove(anchorFen);
     if (activeLineMove?.pv?.length) {
-      return pvToArrows(anchorFen, activeLineMove.pv, 2);
+      return pvToArrows(anchorFen, activeLineMove.pv, 2, anchorSide);
     }
     const moves = displayedAnalysis?.engines[0]?.bestMoves ?? [];
     if (moves.length > 1) {
-      return buildLineArrowsFromMoves(moves, 3, 2);
+      return buildLineArrowsFromMoves(anchorFen, moves, 3, 2, anchorSide);
     }
     if (!displayedAnalysis?.consensusMove) return [];
     const from = displayedAnalysis.consensusMove.slice(0, 2) as Square;
@@ -774,28 +893,40 @@ export function GameReview() {
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       if (e.key === "Escape") {
-        setUserArrows([]);
+        if (linePreview) {
+          goToPly(currentPly);
+        } else {
+          setUserArrows([]);
+        }
         return;
       }
+      // While previewing a line (engine suggestion or the actually-played continuation),
+      // arrow/Home/End step through that preview instead of abandoning it and jumping
+      // the mainline game — previously these always called goToPly(), which silently
+      // exited the preview and could walk it back to the game's starting position.
       if (e.key === "ArrowLeft") {
         e.preventDefault();
-        goToPly(currentPly - 1);
+        if (linePreview) stepLinePreview(-1);
+        else goToPly(currentPly - 1);
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
-        goToPly(currentPly + 1);
+        if (linePreview) stepLinePreview(1);
+        else goToPly(currentPly + 1);
       } else if (e.key === "Home") {
         e.preventDefault();
-        goToPly(0);
+        if (linePreview) stepLinePreview(-linePreview.step);
+        else goToPly(0);
       } else if (e.key === "End") {
         e.preventDefault();
-        goToPly(game.moves.length);
+        if (linePreview) stepLinePreview(linePreview.pv.length - linePreview.step);
+        else goToPly(game.moves.length);
       } else if (e.key === "f" || e.key === "F") {
         if (!e.ctrlKey && !e.metaKey) setOrientation((o) => (o === "white" ? "black" : "white"));
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [game, currentPly, goToPly]);
+  }, [game, currentPly, goToPly, linePreview, stepLinePreview]);
 
   const headers = game?.headers ?? {};
   const whiteName = headers.White ?? "White";
@@ -833,8 +964,14 @@ export function GameReview() {
               <p className="text-xs text-gray-500 hidden sm:block">AI game review</p>
             </div>
             <Link
-              href="/puzzles"
+              href="/play"
               className="ml-1 px-3 py-2 rounded-lg border border-board-border hover:bg-board-hover text-sm text-gray-300 transition-all touch-manipulation min-h-[44px] hidden sm:flex items-center"
+            >
+              ♟ Play
+            </Link>
+            <Link
+              href="/puzzles"
+              className="px-3 py-2 rounded-lg border border-board-border hover:bg-board-hover text-sm text-gray-300 transition-all touch-manipulation min-h-[44px] hidden sm:flex items-center"
             >
               📖 Puzzles
             </Link>
@@ -910,11 +1047,12 @@ export function GameReview() {
       )}
 
       <main className="max-w-[1400px] mx-auto px-3 py-3">
-        {!game && !reviewingGame ? (
+        {!game ? (
           <div className="max-w-md mx-auto pt-16 text-center px-4">
             <h2 className="text-2xl font-bold mb-2">Review your games</h2>
             <p className="text-gray-400 mb-8 text-sm leading-relaxed">
-              Stockfish analyzes every move before review. Open the menu to import a PGN or Chess.com game.
+              Step through any game with live Stockfish evaluation. Open the menu to import a PGN or
+              Chess.com game.
             </p>
             <button
               type="button"
@@ -928,39 +1066,144 @@ export function GameReview() {
               Open menu to import
             </button>
           </div>
-        ) : reviewingGame && batchReview ? (
-          <div className="max-w-lg mx-auto pt-16 px-4 text-center space-y-6">
-            <GameReviewProgress
-              progress={batchReview.percent}
-              gameTitle={batchReview.gameTitle}
-              detail={`Stockfish · position ${batchReview.done} of ${batchReview.total}`}
-              elapsedMs={reviewElapsedMs}
-            />
-            <p className="text-sm text-gray-400 leading-relaxed">
-              Analyzing every position with Stockfish before the review opens. The board appears when this
-              finishes.
-            </p>
-          </div>
-        ) : game ? (
+        ) : (
           <>
+            {batchReview && (
+              <GameReviewProgress
+                progress={batchReview.percent}
+                gameTitle={batchReview.gameTitle}
+                detail={`Stockfish · position ${batchReview.done} of ${batchReview.total}`}
+                elapsedMs={reviewElapsedMs}
+                onCancel={cancelFullReview}
+              />
+            )}
             <div
               className="flex flex-col lg:flex-row gap-3 items-start justify-center lg:max-h-[calc(100dvh-5rem)]"
               data-testid="review-layout"
             >
-              <EngineRail
-                evalScore={whitePerspectiveEval?.eval}
-                mate={whitePerspectiveEval?.mate}
-                analysisMode={analysisMode}
-                onAnalysisModeChange={setAnalysisMode}
-                onDeepAnalyze={analyzePosition}
-                isDeepAnalyzing={isAnalyzing}
-                analysisProgress={analysisProgress}
-                modeNeedsRefresh={modeNeedsRefresh}
-                engineExpanded={engineExpanded}
-                onEngineExpandedChange={setEngineExpanded}
-                commentary={commentaryForPosition}
-                className="order-2 lg:order-1"
-              />
+              <div className="order-2 lg:order-1 flex flex-col gap-2 w-full lg:w-[19rem] lg:min-w-[19rem] shrink-0">
+                <div className="panel p-3 space-y-2" data-testid="full-review-panel">
+                  <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                    Full Game Review
+                  </h3>
+                  {batchReview ? (
+                    <div className="space-y-1.5">
+                      <p className="text-xs text-gray-400">
+                        Stockfish · position {batchReview.done} of {batchReview.total}
+                      </p>
+                      <div className="h-1 rounded-full overflow-hidden bg-board-border">
+                        <div
+                          className="h-full bg-accent transition-all duration-300 ease-out"
+                          style={{ width: `${batchReview.percent}%` }}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={cancelFullReview}
+                        className="text-[11px] text-gray-500 hover:text-white transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : gameReviewCache ? (
+                    <div className="space-y-2" data-testid="review-summary">
+                      <p className="text-xs text-emerald-400">✓ Every move classified</p>
+                      {reviewSummary && (
+                        <div className="grid grid-cols-2 gap-1">
+                          {(Object.keys(CLASSIFICATION_STYLES) as MoveClassification[])
+                            .filter((cls) => (reviewSummary.get(cls) ?? 0) > 0)
+                            .map((cls) => {
+                              const style = CLASSIFICATION_STYLES[cls];
+                              const isOpen = expandedClassification === cls;
+                              return (
+                                <button
+                                  key={cls}
+                                  type="button"
+                                  onClick={() =>
+                                    setExpandedClassification((prev) => (prev === cls ? null : cls))
+                                  }
+                                  title={`Show ${style.label} moves`}
+                                  aria-expanded={isOpen}
+                                  data-testid={`summary-${cls}`}
+                                  className={clsx(
+                                    "flex items-center justify-between rounded px-1.5 py-1 text-xs hover:brightness-110 active:scale-95 transition-all touch-manipulation",
+                                    style.bg,
+                                    isOpen && "ring-1 ring-white/40"
+                                  )}
+                                >
+                                  <span className={clsx("font-medium", style.text)}>
+                                    {style.label}
+                                  </span>
+                                  <span className="tabular-nums text-gray-300">
+                                    {reviewSummary.get(cls)}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                        </div>
+                      )}
+                      {expandedClassification && (
+                        <div
+                          className="space-y-0.5 pt-1 border-t border-board-border"
+                          data-testid="classification-move-list"
+                        >
+                          {(pliesByClassification.get(expandedClassification) ?? []).map((ply) => {
+                            const move = game?.moves[ply - 1];
+                            if (!move) return null;
+                            const label =
+                              ply % 2 === 1
+                                ? `${Math.ceil(ply / 2)}. ${move.san}`
+                                : `${Math.ceil(ply / 2)}… ${move.san}`;
+                            return (
+                              <button
+                                key={ply}
+                                type="button"
+                                onClick={() => goToPly(ply, { collapseMoveList: false })}
+                                className={clsx(
+                                  "w-full flex items-center justify-between rounded px-1.5 py-1 text-xs font-mono transition-colors touch-manipulation",
+                                  ply === currentPly
+                                    ? "bg-accent/15 text-white"
+                                    : "text-gray-400 hover:bg-board-hover hover:text-white"
+                                )}
+                              >
+                                {label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <>
+                      <p className="text-xs text-gray-500">
+                        Classify every move (brilliant, blunder, etc.) with a full Stockfish pass.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={runFullReview}
+                        data-testid="run-full-review"
+                        className="w-full py-2 rounded-lg bg-accent hover:bg-accent-muted text-white text-sm font-semibold transition-all min-h-[36px] touch-manipulation"
+                      >
+                        Run full review
+                      </button>
+                    </>
+                  )}
+                </div>
+
+                <EngineRail
+                  evalScore={whitePerspectiveEval?.eval}
+                  mate={whitePerspectiveEval?.mate}
+                  analysisMode={analysisMode}
+                  onAnalysisModeChange={setAnalysisMode}
+                  onDeepAnalyze={analyzePosition}
+                  isDeepAnalyzing={isAnalyzing}
+                  analysisProgress={analysisProgress}
+                  modeNeedsRefresh={modeNeedsRefresh}
+                  engineExpanded={engineExpanded}
+                  onEngineExpandedChange={setEngineExpanded}
+                  commentary={commentaryForPosition}
+                />
+              </div>
 
               <div className="order-1 lg:order-2 flex-1 w-full min-w-0 max-w-[520px]">
                 <div className="flex flex-row items-stretch gap-0 w-full">
@@ -990,6 +1233,8 @@ export function GameReview() {
                         interactive
                         onSquareClick={onSquareClick}
                         onPieceDrop={onPieceDrop}
+                        onPieceDragBegin={onPieceDragBegin}
+                        onPieceDragEnd={onPieceDragEnd}
                         onPromotionSelect={onPromotionSelect}
                         canDragPiece={canDragPiece}
                         onBoardWidthChange={setBoardWidth}
@@ -1042,22 +1287,49 @@ export function GameReview() {
                 )}
 
                 <BoardControls
-                  onStart={() => goToPly(0)}
-                  onEnd={() => goToPly(game.moves.length)}
-                  onPrev={() => goToPly(currentPly - 1)}
-                  onNext={() => goToPly(currentPly + 1)}
-                  canPrev={currentPly > 0}
-                  canNext={currentPly < game.moves.length}
-                  currentPly={currentPly}
-                  totalPlies={game.moves.length}
+                  onStart={() => (linePreview ? stepLinePreview(-linePreview.step) : goToPly(0))}
+                  onEnd={() =>
+                    linePreview
+                      ? stepLinePreview(linePreview.pv.length - linePreview.step)
+                      : goToPly(game.moves.length)
+                  }
+                  onPrev={() => (linePreview ? stepLinePreview(-1) : goToPly(currentPly - 1))}
+                  onNext={() => (linePreview ? stepLinePreview(1) : goToPly(currentPly + 1))}
+                  canPrev={linePreview ? linePreview.step > 0 : currentPly > 0}
+                  canNext={linePreview ? linePreview.step < linePreview.pv.length : currentPly < game.moves.length}
+                  currentPly={linePreview ? linePreview.step : currentPly}
+                  totalPlies={linePreview ? linePreview.pv.length : game.moves.length}
                 />
+
+                <div className="mt-3 w-full">
+                  <MoveList
+                    game={game}
+                    moves={game.moves}
+                    currentPly={currentPly}
+                    onSelectPly={(ply) => goToPly(ply, { collapseMoveList: false })}
+                    classifications={classifications}
+                    expanded={moveListExpanded}
+                    onExpandedChange={setMoveListExpanded}
+                    variant="default"
+                    previewBranch={
+                      linePreview
+                        ? {
+                            anchorPly: linePreview.anchorPly,
+                            sanMoves: previewSanMoves,
+                            currentStep: linePreview.step,
+                          }
+                        : null
+                    }
+                    onSelectPreviewStep={goToPreviewStep}
+                  />
+                </div>
 
                 {evalGraphData.length > 1 && (
                   <div className="mt-3 lg:hidden">
                     <EvalGraph
                       evals={evalGraphData}
                       currentPly={currentPly}
-                      onSelectPly={goToPly}
+                      onSelectPly={(ply) => goToPly(ply, { collapseMoveList: false })}
                     />
                   </div>
                 )}
@@ -1067,27 +1339,17 @@ export function GameReview() {
                 className="order-3 w-full lg:w-[15.5rem] lg:max-w-[15.5rem] shrink-0 flex flex-col gap-2 max-h-[calc(100dvh-5rem)] overflow-y-auto lg:sticky lg:top-14 lg:self-start scroll-mt-16 relative z-20"
                 data-testid="right-sidebar"
               >
-                <MoveList
-                  game={game}
-                  moves={game.moves}
-                  currentPly={currentPly}
-                  onSelectPly={goToPly}
-                  classifications={classifications}
-                  expanded={moveListExpanded}
-                  onExpandedChange={setMoveListExpanded}
-                  variant="sidebar"
-                />
                 {evalGraphData.length > 1 && (
                   <div className="hidden lg:block">
                     <EvalGraph
                       evals={evalGraphData}
                       currentPly={currentPly}
-                      onSelectPly={goToPly}
+                      onSelectPly={(ply) => goToPly(ply, { collapseMoveList: false })}
                     />
                   </div>
                 )}
                 <BestMovesPanel
-                  fen={game ? fenAtPly(game, currentPly) : currentFen}
+                  fen={currentFen}
                   analysis={displayedAnalysis}
                   bookMoves={bookMoves}
                   bookLoading={bookLoading}
@@ -1095,11 +1357,12 @@ export function GameReview() {
                   selectedLineUci={selectedLineUci}
                   onSelectLine={(uci) => setSelectedLineUci(uci)}
                   onPlayLine={startLinePreview}
+                  playedLine={playedLine}
                 />
               </aside>
             </div>
           </>
-        ) : null}
+        )}
       </main>
     </div>
   );

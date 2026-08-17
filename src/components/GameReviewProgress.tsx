@@ -5,6 +5,7 @@ interface GameReviewProgressProps {
   gameTitle: string;
   detail: string;
   elapsedMs?: number;
+  onCancel?: () => void;
 }
 
 function formatElapsed(ms: number): string {
@@ -15,7 +16,13 @@ function formatElapsed(ms: number): string {
   return `${seconds}s`;
 }
 
-export function GameReviewProgress({ progress, gameTitle, detail, elapsedMs }: GameReviewProgressProps) {
+export function GameReviewProgress({
+  progress,
+  gameTitle,
+  detail,
+  elapsedMs,
+  onCancel,
+}: GameReviewProgressProps) {
   const pct = Math.min(100, Math.max(0, Math.round(progress)));
 
   return (
@@ -36,6 +43,16 @@ export function GameReviewProgress({ progress, gameTitle, detail, elapsedMs }: G
           </span>
         )}
         <span className="text-xs tabular-nums text-accent shrink-0">{pct}%</span>
+        {onCancel && (
+          <button
+            type="button"
+            onClick={onCancel}
+            data-testid="cancel-review-banner"
+            className="text-xs text-gray-400 hover:text-white border border-board-border hover:border-gray-500 rounded-md px-2 py-1 shrink-0 transition-colors"
+          >
+            Cancel
+          </button>
+        )}
       </div>
       <div className="h-1 bg-board-border">
         <div

@@ -68,12 +68,11 @@ export function buildMoveHintStyles(
     styles[move.to] = isCapture
       ? {
           background:
-            "radial-gradient(transparent 0%, transparent 68%, rgba(0,0,0,0.25) 69%, rgba(0,0,0,0.25) 78%, transparent 79%)",
-          backgroundColor: "rgba(20, 85, 30, 0.35)",
+            "radial-gradient(transparent 0%, transparent 62%, rgba(129,182,76,0.85) 63%, rgba(129,182,76,0.85) 76%, transparent 77%)",
         }
       : {
           background:
-            "radial-gradient(circle, rgba(0,0,0,0.22) 19%, transparent 20%)",
+            "radial-gradient(circle, rgba(129,182,76,0.75) 0%, rgba(129,182,76,0.75) 27%, transparent 28%)",
         };
   }
 

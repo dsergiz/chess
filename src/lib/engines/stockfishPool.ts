@@ -109,7 +109,10 @@ function ensureWorker(): Promise<void> {
   if (initPromise) return initPromise;
 
   initPromise = new Promise((resolve, reject) => {
-    worker = new Worker("/stockfish-worker.js");
+    // Constructed directly against /stockfish.js (not a wrapper) so the engine's own
+    // self.location-based lookup of its .wasm companion resolves to the right file —
+    // importScripts() from a wrapper worker leaves self.location pointing at the wrapper.
+    worker = new Worker("/stockfish.js");
     const timeout = setTimeout(() => reject(new Error("Stockfish init timeout")), 12000);
 
     const onMessage = (e: MessageEvent<string>) => {
@@ -324,6 +327,15 @@ export async function analyzeWithStockfishPool(
 
 export function clearAnalysisCache(): void {
   analysisCache.clear();
+}
+
+/** Pre-populates the in-memory cache (e.g. from persisted storage) so matching positions skip re-analysis. */
+export function primeAnalysisCache(
+  entries: { fen: string; mode: AnalysisMode; analysis: MultiEngineAnalysis }[]
+): void {
+  entries.forEach(({ fen, mode, analysis }) => {
+    analysisCache.set(cacheKeyForAnalysis(fen, mode), analysis);
+  });
 }
 
 export { ANALYSIS_MODE_PASSES, ANALYSIS_MODE_LABELS, type AnalysisMode } from "./analysisModes";

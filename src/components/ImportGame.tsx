@@ -220,6 +220,11 @@ export function ImportGame({
                 <span>
                   {game.white.rating} vs {game.black.rating}
                 </span>
+                {game.moveCount > 0 && (
+                  <span>
+                    {game.moveCount} move{game.moveCount === 1 ? "" : "s"}
+                  </span>
+                )}
               </div>
             </button>
           ))}

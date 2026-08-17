@@ -40,7 +40,24 @@ export function EvalGraph({ evals, currentPly, onSelectPly }: EvalGraphProps) {
         role="img"
         aria-label="Evaluation graph"
       >
-        <line x1="0" y1={height / 2} x2={width} y2={height / 2} stroke="#3d3a37" strokeWidth="0.5" />
+        <rect x="0" y="0" width={width} height={height / 2} fill="#eeeed2" fillOpacity="0.06" />
+        <rect x="0" y={height / 2} width={width} height={height / 2} fill="#000000" fillOpacity="0.18" />
+        <line
+          x1="0"
+          y1={height / 2}
+          x2={width}
+          y2={height / 2}
+          stroke="#ffffff"
+          strokeOpacity="0.3"
+          strokeWidth="0.6"
+          strokeDasharray="1.5 1.2"
+        />
+        <text x="1" y="4.5" fontSize="4" fill="#eeeed2" fillOpacity="0.55">
+          W
+        </text>
+        <text x="1" y={height - 1.5} fontSize="4" fill="#9a958e" fillOpacity="0.7">
+          B
+        </text>
         {points && (
           <polyline
             fill="none"

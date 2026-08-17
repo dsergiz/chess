@@ -30,6 +30,16 @@ function buildGameMove(move: Move, afterMove: Chess, ply: number): GameMove {
   };
 }
 
+/** Deterministic FNV-1a hash so identical pasted PGNs share a stable game id (and cache entry). */
+function hashPgn(pgn: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < pgn.length; i++) {
+    hash ^= pgn.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `pgn-${(hash >>> 0).toString(16)}`;
+}
+
 export function parsePgn(pgn: string, id?: string): ImportedGame {
   const cleaned = sanitizePgn(pgn);
   const chess = new Chess();
@@ -59,7 +69,7 @@ export function parsePgn(pgn: string, id?: string): ImportedGame {
   });
 
   return {
-    id: id ?? crypto.randomUUID(),
+    id: id ?? hashPgn(cleaned),
     pgn,
     headers,
     moves,
@@ -318,7 +328,10 @@ export function computeMoveEvalLoss(
 export function computeClassificationsFromCache(
   game: ImportedGame,
   cache: Map<number, { engines: { eval: number; mate?: number; bestMoves: { uci: string; score: number; mate?: number }[] }[] }>,
-  evalsAreWhitePov = false
+  evalsAreWhitePov = false,
+  /** Real opening-theory data (Lichess Masters DB) keyed by the fen before the move — when a
+   * position isn't covered, classification falls back to refineClassification's ply heuristic. */
+  bookMovesByFen?: Map<string, Set<string>>
 ): Map<number, MoveClassification> {
   const map = new Map<number, MoveClassification>();
   for (let ply = 1; ply <= game.moves.length; ply++) {
@@ -328,22 +341,27 @@ export function computeClassificationsFromCache(
     const base = classifyMove(loss);
     const before = cache.get(ply - 1)?.engines[0];
     const move = game.moves[ply - 1];
-    const beforeStm = sideToMoveFromFen(fenAtPly(game, ply - 1));
+    const beforeFen = fenAtPly(game, ply - 1);
+    const beforeStm = sideToMoveFromFen(beforeFen);
     const evalBeforeWhite = before
       ? evalsAreWhitePov
         ? before.eval
         : evalToWhitePerspective(before.eval, before.mate, beforeStm).eval
       : 0;
 
+    const isBook = bookMovesByFen?.get(beforeFen)?.has(move.uci) ?? false;
+
     map.set(
       ply,
-      refineClassification(base, {
-        ply,
-        move,
-        afterFen: move.fen,
-        evalBeforeWhite,
-        bestMoves: before?.bestMoves,
-      })
+      isBook
+        ? "book"
+        : refineClassification(base, {
+            ply,
+            move,
+            afterFen: move.fen,
+            evalBeforeWhite,
+            bestMoves: before?.bestMoves,
+          })
     );
   }
   return map;

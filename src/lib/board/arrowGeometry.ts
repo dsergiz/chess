@@ -65,36 +65,80 @@ export function shortenSegment(
   };
 }
 
-export interface ArrowSegment {
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
+type Point = { x: number; y: number };
+
+function unitVector(dx: number, dy: number): Point {
+  const len = Math.hypot(dx, dy) || 1;
+  return { x: dx / len, y: dy / len };
 }
 
-/** One or two segments (knight L) with shortened ends for arrowheads. */
-export function buildArrowSegments(
+function perpVector(dx: number, dy: number): Point {
+  const u = unitVector(dx, dy);
+  return { x: -u.y, y: u.x };
+}
+
+/** Rectangle (as 4 corners) for a constant-width segment from p1 to p2. */
+function shaftRect(p1: Point, p2: Point, halfWidth: number): Point[] {
+  const n = perpVector(p2.x - p1.x, p2.y - p1.y);
+  const ox = n.x * halfWidth;
+  const oy = n.y * halfWidth;
+  return [
+    { x: p1.x + ox, y: p1.y + oy },
+    { x: p2.x + ox, y: p2.y + oy },
+    { x: p2.x - ox, y: p2.y - oy },
+    { x: p1.x - ox, y: p1.y - oy },
+  ];
+}
+
+function polygonPath(points: Point[]): string {
+  return `M ${points.map((p) => `${p.x.toFixed(2)} ${p.y.toFixed(2)}`).join(" L ")} Z`;
+}
+
+/**
+ * SVG path `d` for one chess.com-style arrow: a constant-width rectangular
+ * shaft (with a hard right-angle bend for knight moves) ending in a wide
+ * flat-backed triangular head. Built as filled polygon subpaths inside a
+ * single path (rendered with fill, no stroke) so the knight elbow reads as
+ * one solid shape instead of two thin bolted-together lines.
+ */
+export function buildArrowShape(
   from: Square,
   to: Square,
   boardWidth: number,
   orientation: "white" | "black"
-): ArrowSegment[] {
-  const trim = boardWidth / 32;
+): string {
+  const squareWidth = boardWidth / 8;
+  const shaftHalfWidth = squareWidth * 0.12;
+  const headHalfWidth = squareWidth * 0.3;
+  const headLength = squareWidth * 0.55;
+
   const start = squareCenter(from, boardWidth, orientation);
-  const endFull = squareCenter(to, boardWidth, orientation);
+  const tip = squareCenter(to, boardWidth, orientation);
+
+  const headDirSource = isKnightMove(from, to)
+    ? squareCenter(knightCornerSquare(from, to), boardWidth, orientation)
+    : start;
+  const headDir = unitVector(tip.x - headDirSource.x, tip.y - headDirSource.y);
+  const headBase: Point = {
+    x: tip.x - headDir.x * headLength,
+    y: tip.y - headDir.y * headLength,
+  };
+  const headPerp = perpVector(headDir.x, headDir.y);
+  const head = polygonPath([
+    { x: headBase.x + headPerp.x * headHalfWidth, y: headBase.y + headPerp.y * headHalfWidth },
+    tip,
+    { x: headBase.x - headPerp.x * headHalfWidth, y: headBase.y - headPerp.y * headHalfWidth },
+  ]);
 
   if (isKnightMove(from, to)) {
     const corner = squareCenter(knightCornerSquare(from, to), boardWidth, orientation);
-    const leg1End = shortenSegment(start, corner, trim * 0.35);
-    const leg2End = shortenSegment(corner, endFull, trim);
-    return [
-      { x1: start.x, y1: start.y, x2: leg1End.x, y2: leg1End.y },
-      { x1: corner.x, y1: corner.y, x2: leg2End.x, y2: leg2End.y },
-    ];
+    const leg1 = polygonPath(shaftRect(start, corner, shaftHalfWidth));
+    const leg2 = polygonPath(shaftRect(corner, headBase, shaftHalfWidth));
+    return [leg1, leg2, head].join(" ");
   }
 
-  const end = shortenSegment(start, endFull, trim);
-  return [{ x1: start.x, y1: start.y, x2: end.x, y2: end.y }];
+  const shaft = polygonPath(shaftRect(start, headBase, shaftHalfWidth));
+  return [shaft, head].join(" ");
 }
 
 export const USER_ARROW_COLORS = {

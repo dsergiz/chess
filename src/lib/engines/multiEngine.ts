@@ -50,7 +50,7 @@ export function analyzePositionInWorker(
       return;
     }
 
-    const worker = new Worker("/stockfish-worker.js");
+    const worker = new Worker("/stockfish.js");
     let bestInfo: ParsedInfoLine | null = null;
     const allMoves = new Map<string, { score: number; mate?: number; depth: number; pv: string[] }>();
     let timeout: ReturnType<typeof setTimeout>;
@@ -151,6 +151,7 @@ export {
   cancelActiveAnalysis,
   getCachedAnalysis,
   clearAnalysisCache,
+  primeAnalysisCache,
 } from "./stockfishPool";
 export type { AnalysisMode } from "./analysisModes";
 export { ANALYSIS_MODE_LABELS } from "./analysisModes";

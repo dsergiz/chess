@@ -1,0 +1,42 @@
+{
+  "config": {
+    "baseUrl": "http://127.0.0.1:11434",
+    "defaultModel": "gemma4:26b",
+    "budgetMinutes": 240,
+    "maxCharsPerBatch": 12000,
+    "numCtx": 8192,
+    "numPredict": 1024,
+    "extensions": [".ts", ".tsx"]
+  },
+  "tasks": [
+    {
+      "id": "vuln-scan-api",
+      "type": "vulnerability-scan",
+      "priority": 1,
+      "target": "src/app/api",
+      "enabled": true
+    },
+    {
+      "id": "vuln-scan-lib",
+      "type": "vulnerability-scan",
+      "priority": 2,
+      "target": "src/lib",
+      "enabled": true
+    },
+    {
+      "id": "dead-code-src",
+      "type": "dead-code",
+      "priority": 3,
+      "target": "src",
+      "enabled": true
+    },
+    {
+      "id": "doc-drift-readme",
+      "type": "doc-drift",
+      "priority": 4,
+      "target": "src/lib",
+      "docFile": "README.md",
+      "enabled": true
+    }
+  ]
+}

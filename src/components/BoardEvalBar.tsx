@@ -56,6 +56,10 @@ export function BoardEvalBar({
       >
         <div className="absolute inset-0 bg-[#403d39]" />
         <div
+          className="absolute left-0 right-0 top-1/2 h-px bg-black/50 z-10 pointer-events-none"
+          data-testid="eval-bar-midline"
+        />
+        <div
           className={clsx(
             "absolute left-0 right-0 bg-[#eeeed2] transition-[height] duration-300 ease-out",
             isLoading && hasEval && "opacity-90"

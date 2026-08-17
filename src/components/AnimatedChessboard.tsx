@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Chessboard } from "react-chessboard";
 import { TouchBackend } from "react-dnd-touch-backend";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, animate, useMotionValue, useMotionValueEvent } from "framer-motion";
 import type { Square } from "chess.js";
 import { Chess } from "@/lib/chess";
 import {
@@ -30,13 +30,27 @@ for (const f of "abcdefgh") {
   }
 }
 
-function Piece({ piece }: { piece: PieceKey }) {
+function Piece({
+  piece,
+  squareWidth,
+  isDragging,
+}: {
+  piece: PieceKey;
+  squareWidth?: number;
+  isDragging?: boolean;
+}) {
+  // react-chessboard's drag-preview layer renders this with no sized ancestor, so the
+  // img's `width/height: 100%` (from .piece-img) falls back to its native pixel size —
+  // that's the "magnified" piece while dragging. Pin an explicit, slightly reduced size
+  // only in that case; normal in-square rendering still relies on the square filling it.
+  const dragSize = isDragging && squareWidth ? squareWidth * 0.82 : undefined;
   return (
     <img
       src={pieceImageUrl(piece)}
       alt=""
       className="piece-img"
       draggable={false}
+      style={dragSize ? { width: dragSize, height: dragSize } : undefined}
       onError={(e) => {
         (e.target as HTMLImageElement).style.opacity = "0.3";
       }}
@@ -44,19 +58,21 @@ function Piece({ piece }: { piece: PieceKey }) {
   );
 }
 
-const customPieces: Record<PieceKey, () => React.JSX.Element> = {
-  wP: () => <Piece piece="wP" />,
-  wN: () => <Piece piece="wN" />,
-  wB: () => <Piece piece="wB" />,
-  wR: () => <Piece piece="wR" />,
-  wQ: () => <Piece piece="wQ" />,
-  wK: () => <Piece piece="wK" />,
-  bP: () => <Piece piece="bP" />,
-  bN: () => <Piece piece="bN" />,
-  bB: () => <Piece piece="bB" />,
-  bR: () => <Piece piece="bR" />,
-  bQ: () => <Piece piece="bQ" />,
-  bK: () => <Piece piece="bK" />,
+type CustomPieceArgs = { squareWidth: number; isDragging: boolean };
+
+const customPieces: Record<PieceKey, (args: CustomPieceArgs) => React.JSX.Element> = {
+  wP: (a) => <Piece piece="wP" {...a} />,
+  wN: (a) => <Piece piece="wN" {...a} />,
+  wB: (a) => <Piece piece="wB" {...a} />,
+  wR: (a) => <Piece piece="wR" {...a} />,
+  wQ: (a) => <Piece piece="wQ" {...a} />,
+  wK: (a) => <Piece piece="wK" {...a} />,
+  bP: (a) => <Piece piece="bP" {...a} />,
+  bN: (a) => <Piece piece="bN" {...a} />,
+  bB: (a) => <Piece piece="bB" {...a} />,
+  bR: (a) => <Piece piece="bR" {...a} />,
+  bQ: (a) => <Piece piece="bQ" {...a} />,
+  bK: (a) => <Piece piece="bK" {...a} />,
 };
 
 interface AnimatedChessboardProps {
@@ -77,6 +93,8 @@ interface AnimatedChessboardProps {
   canDragPiece?: (square: Square, piece: string) => boolean;
   interactive?: boolean;
   onBoardWidthChange?: (width: number) => void;
+  onPieceDragBegin?: (square: Square) => void;
+  onPieceDragEnd?: () => void;
 }
 
 export function AnimatedChessboard({
@@ -97,6 +115,8 @@ export function AnimatedChessboard({
   canDragPiece,
   interactive = false,
   onBoardWidthChange,
+  onPieceDragBegin,
+  onPieceDragEnd,
 }: AnimatedChessboardProps) {
   const [captureEffect, setCaptureEffect] = useState<{
     square: Square;
@@ -108,26 +128,35 @@ export function AnimatedChessboard({
     key: number;
   } | null>(null);
   const [prevFen, setPrevFen] = useState(fen);
+  // Board width animates via a spring instead of snapping — layout shifts (e.g. a sidebar
+  // appearing/disappearing) resize the board smoothly rather than jumping to the new size.
+  const boardWidthMotion = useMotionValue(480);
   const [width, setWidth] = useState(480);
+  const hasMeasuredRef = useRef(false);
   const [promotion, setPromotion] = useState<{ from: Square; to: Square } | null>(null);
   const [arrowFrom, setArrowFrom] = useState<Square | null>(null);
   const [arrowPreview, setArrowPreview] = useState<BoardArrow | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const drawModifiers = useRef({ shiftKey: false, altKey: false });
 
+  useMotionValueEvent(boardWidthMotion, "change", (v) => setWidth(Math.round(v)));
+
   useEffect(() => {
     const node = containerRef.current;
     if (!node) return;
     const observer = new ResizeObserver((entries) => {
       const w = entries[0]?.contentRect.width ?? 480;
-      setWidth(Math.max(280, Math.min(w, 560)));
+      const clamped = Math.max(280, Math.min(w, 560));
+      if (!hasMeasuredRef.current) return; // initial size is set synchronously below
+      animate(boardWidthMotion, clamped, { type: "spring", stiffness: 260, damping: 32, mass: 0.6 });
     });
     observer.observe(node);
     const initial = Math.max(280, Math.min(node.clientWidth || 480, 560));
-    setWidth(initial);
+    boardWidthMotion.set(initial);
+    hasMeasuredRef.current = true;
     onBoardWidthChange?.(initial);
     return () => observer.disconnect();
-  }, [onBoardWidthChange]);
+  }, [onBoardWidthChange, boardWidthMotion]);
 
   useEffect(() => {
     onBoardWidthChange?.(width);
@@ -151,10 +180,24 @@ export function AnimatedChessboard({
   }, [fen, prevFen, lastMove, castleRookMove]);
 
   const squareStyles = useMemo(() => {
-    const styles: Record<string, React.CSSProperties> = {
-      ...moveHintStyles,
-      ...highlightSquares,
-    };
+    const styles: Record<string, React.CSSProperties> = {};
+    const keys = new Set([...Object.keys(moveHintStyles), ...Object.keys(highlightSquares)]);
+    keys.forEach((sq) => {
+      const hint = moveHintStyles[sq];
+      const highlight = highlightSquares[sq];
+      // Both use the `background` property for a dot/gradient — layer them (CSS
+      // supports comma-separated background layers) instead of letting one clobber
+      // the other, so the legal-move dot still shows on an engine-highlighted square.
+      if (hint?.background && highlight?.background) {
+        styles[sq] = {
+          ...highlight,
+          ...hint,
+          background: `${hint.background}, ${highlight.background}`,
+        };
+      } else {
+        styles[sq] = { ...hint, ...highlight };
+      }
+    });
 
     if (checkSquare) {
       styles[checkSquare] = {
@@ -402,6 +445,8 @@ export function AnimatedChessboard({
         }
         onSquareClick={onSquareClick}
         onPieceDrop={onPieceDrop}
+        onPieceDragBegin={(_piece, sourceSquare) => onPieceDragBegin?.(sourceSquare)}
+        onPieceDragEnd={() => onPieceDragEnd?.()}
         boardWidth={width}
         // react-chessboard auto-picks react-dnd's HTML5Backend vs TouchBackend based on
         // `"ontouchstart" in window`, which is true on many touch-capable laptops even when
